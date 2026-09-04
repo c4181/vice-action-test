@@ -1,10 +1,10 @@
 name: Update flatpak
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
     inputs:
-      ref_name: 
-        description: tag
-        required: true
+      ref_name:
+        description: tag (leave blank to update the beta branch)
+        required: false
       sha:
         description: sha
         required: true
@@ -12,10 +12,14 @@ jobs:
   update-flatpak:
     runs-on: ubuntu-latest
     steps:
-      - name: Determine flathub branch
-        id: flathub_branch
+      - name: Determine ref and flathub branch
+        id: ref
+        env:
+          REF_NAME: ${{ inputs.ref_name }}
         run: |
-          if [[ ${{ inputs.ref_name }} == *"beta"* ]]; then
+          REF="${REF_NAME:-beta}"
+          echo "ref=${REF}" >> $GITHUB_OUTPUT
+          if [[ "$REF" == *"beta"* ]]; then
             echo "branch=beta" >> $GITHUB_OUTPUT
           else
             echo "branch=master" >> $GITHUB_OUTPUT
@@ -23,12 +27,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: flathub/io.github.mmp.Vice
-          ref: ${{ steps.flathub_branch.outputs.branch }}
+          ref: ${{ steps.ref.outputs.branch }}
           path: flathub
       - uses: actions/checkout@v6
         with:
           repository: mmp/vice
-          ref: ${{ inputs.ref_name }}
+          ref: ${{ steps.ref.outputs.ref }}
           path: vice
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -42,7 +46,6 @@ jobs:
         working-directory: vice
         run: |
           BASE_URL="https://vice-resources.pharr.org"
-
           jq -r 'to_entries[] | "\(.key)\t\(.value.hash)\t\(.value.size)"' resources/models/manifest.json | \
           while IFS=$'\t' read -r filepath hash size; do
             dir=$(dirname "$filepath")
@@ -60,9 +63,12 @@ jobs:
           done > ../flathub/vice-resources.yaml
       - name: Update tag and sha
         working-directory: flathub
+        env:
+          REF: ${{ steps.ref.outputs.ref }}
+          SHA: ${{ inputs.sha }}
         run: |
-          yq -i '(.modules[] | select(.name == "vice") | .sources[0].tag) = "${{ inputs.ref_name }}"' io.github.mmp.Vice.yml
-          yq -i '(.modules[] | select(.name == "vice") | .sources[0].commit) = "${{ inputs.sha }}"' io.github.mmp.Vice.yml
+          yq -i '(.modules[] | select(.name == "vice") | .sources[0].tag) = strenv(REF)' io.github.mmp.Vice.yml
+          yq -i '(.modules[] | select(.name == "vice") | .sources[0].commit) = strenv(SHA)' io.github.mmp.Vice.yml
       - name: Create pull request
         if: ${{ success() }}
         id: create-pr
@@ -70,9 +76,9 @@ jobs:
         with:
           path: flathub
           token: ${{ secrets.FLATHUB_TOKEN }}
-          branch: update/${{ inputs.ref_name }}
-          commit-message: update to ${{ inputs.ref_name }}
-          title: Update to ${{ inputs.ref_name }}
+          branch: update/${{ steps.ref.outputs.ref }}
+          commit-message: update to ${{ steps.ref.outputs.ref }}
+          title: Update to ${{ steps.ref.outputs.ref }}
           delete-branch: true
           sign-commits: true
           committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
