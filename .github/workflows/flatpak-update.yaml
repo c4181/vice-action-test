@@ -16,13 +16,23 @@ jobs:
         id: ref
         env:
           REF_NAME: ${{ inputs.ref_name }}
+          SHA: ${{ inputs.sha }}
         run: |
-          REF="${REF_NAME:-beta}"
-          echo "ref=${REF}" >> $GITHUB_OUTPUT
-          if [[ "$REF" == *"beta"* ]]; then
-            echo "branch=beta" >> $GITHUB_OUTPUT
+          if [[ -n "$REF_NAME" ]]; then
+            # A tag was given: check vice out at that tag, and derive the
+            # flathub branch from whether it looks like a beta tag.
+            echo "vice_ref=${REF_NAME}" >> $GITHUB_OUTPUT
+            echo "label=${REF_NAME}" >> $GITHUB_OUTPUT
+            if [[ "$REF_NAME" == *"beta"* ]]; then
+              echo "branch=beta" >> $GITHUB_OUTPUT
+            else
+              echo "branch=master" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "branch=master" >> $GITHUB_OUTPUT
+            # No tag given: check vice out at the exact commit
+            echo "vice_ref=${SHA}" >> $GITHUB_OUTPUT
+            echo "label=beta-${SHA:0:7}" >> $GITHUB_OUTPUT
+            echo "branch=beta" >> $GITHUB_OUTPUT
           fi
       - uses: actions/checkout@v6
         with:
@@ -32,7 +42,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: mmp/vice
-          ref: ${{ steps.ref.outputs.ref }}
+          ref: ${{ steps.ref.outputs.vice_ref }}
           path: vice
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -64,11 +74,17 @@ jobs:
       - name: Update tag and sha
         working-directory: flathub
         env:
-          REF: ${{ steps.ref.outputs.ref }}
+          REF_NAME: ${{ inputs.ref_name }}
           SHA: ${{ inputs.sha }}
         run: |
-          yq -i '(.modules[] | select(.name == "vice") | .sources[0].tag) = strenv(REF)' io.github.mmp.Vice.yml
           yq -i '(.modules[] | select(.name == "vice") | .sources[0].commit) = strenv(SHA)' io.github.mmp.Vice.yml
+          if [[ -n "$REF_NAME" ]]; then
+            yq -i '(.modules[] | select(.name == "vice") | .sources[0].tag) = strenv(REF_NAME)' io.github.mmp.Vice.yml
+          else
+            # No tag for this update (pinned by commit only) - drop any
+            # stale tag left over from a previous tagged release.
+            yq -i '(.modules[] | select(.name == "vice") | .sources[0]) |= del(.tag)' io.github.mmp.Vice.yml
+          fi
       - name: Create pull request
         if: ${{ success() }}
         id: create-pr
@@ -76,9 +92,9 @@ jobs:
         with:
           path: flathub
           token: ${{ secrets.FLATHUB_TOKEN }}
-          branch: update/${{ steps.ref.outputs.ref }}
-          commit-message: update to ${{ steps.ref.outputs.ref }}
-          title: Update to ${{ steps.ref.outputs.ref }}
+          branch: update/${{ steps.ref.outputs.label }}
+          commit-message: update to ${{ steps.ref.outputs.label }}
+          title: Update to ${{ steps.ref.outputs.label }}
           delete-branch: true
           sign-commits: true
           committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
